@@ -21,7 +21,28 @@ env:
   IMAGE_PREFIX: whiskey-works/kubevirt
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run virt-controller unit tests
+        run: |
+          echo "## Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Running virt-controller unit tests (includes hotplug fix tests)..." >> $GITHUB_STEP_SUMMARY
+
+          # Run tests for virt-controller VMI handling (where hotplug fix lives)
+          make bazel-test WHAT="//pkg/virt-controller/watch/vmi/..."
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ All virt-controller tests passed" >> $GITHUB_STEP_SUMMARY
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
