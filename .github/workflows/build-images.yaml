@@ -18,7 +18,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: whiskey-works/kubevirt
+  # Registry path for images (used in DOCKER_PREFIX)
+  REGISTRY_PATH: whiskey-works/kubevirt
 
 jobs:
   test:
@@ -79,19 +80,23 @@ jobs:
 
       - name: Build multi-arch images with dockerized Bazel
         env:
-          DOCKER_PREFIX: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}
+          # DOCKER_PREFIX = full registry path (ghcr.io/whiskey-works/kubevirt)
+          DOCKER_PREFIX: ${{ env.REGISTRY }}/${{ env.REGISTRY_PATH }}
           DOCKER_TAG: ${{ steps.version.outputs.tag }}
+          # IMAGE_PREFIX = empty, so image names are clean (virt-controller, not kubevirtvirt-controller)
+          IMAGE_PREFIX: ""
           BUILD_ARCH: amd64,crossbuild-aarch64
         run: |
           echo "Building multi-arch images (amd64 + arm64)"
-          echo "DOCKER_PREFIX=$DOCKER_PREFIX DOCKER_TAG=$DOCKER_TAG BUILD_ARCH=$BUILD_ARCH"
+          echo "DOCKER_PREFIX=$DOCKER_PREFIX DOCKER_TAG=$DOCKER_TAG IMAGE_PREFIX=$IMAGE_PREFIX BUILD_ARCH=$BUILD_ARCH"
           make bazel-build-images
 
       - name: Push multi-arch images
         if: github.event_name != 'pull_request' && (github.event.inputs.push_images != 'false')
         env:
-          DOCKER_PREFIX: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}
+          DOCKER_PREFIX: ${{ env.REGISTRY }}/${{ env.REGISTRY_PATH }}
           DOCKER_TAG: ${{ steps.version.outputs.tag }}
+          IMAGE_PREFIX: ""
           BUILD_ARCH: amd64,crossbuild-aarch64
         run: |
           echo "Pushing multi-arch images (amd64 + arm64)"
@@ -105,14 +110,15 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Component | Image |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| virt-operator | \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/virt-operator:${TAG}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| virt-api | \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/virt-api:${TAG}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| virt-controller | \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/virt-controller:${TAG}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| virt-handler | \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/virt-handler:${TAG}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| virt-launcher | \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/virt-launcher:${TAG}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| virt-operator | \`${{ env.REGISTRY }}/${{ env.REGISTRY_PATH }}/virt-operator:${TAG}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| virt-api | \`${{ env.REGISTRY }}/${{ env.REGISTRY_PATH }}/virt-api:${TAG}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| virt-controller | \`${{ env.REGISTRY }}/${{ env.REGISTRY_PATH }}/virt-controller:${TAG}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| virt-handler | \`${{ env.REGISTRY }}/${{ env.REGISTRY_PATH }}/virt-handler:${TAG}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| virt-launcher | \`${{ env.REGISTRY }}/${{ env.REGISTRY_PATH }}/virt-launcher:${TAG}\` |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Deploy with:" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "kubectl set image -n kubevirt deployment/virt-controller virt-controller=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/virt-controller:${TAG}" >> $GITHUB_STEP_SUMMARY
-          echo "kubectl set image -n kubevirt daemonset/virt-handler virt-handler=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/virt-handler:${TAG}" >> $GITHUB_STEP_SUMMARY
+          echo "### Deploy with KubeVirt CR:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`yaml" >> $GITHUB_STEP_SUMMARY
+          echo "spec:" >> $GITHUB_STEP_SUMMARY
+          echo "  imageRegistry: ${{ env.REGISTRY }}/${{ env.REGISTRY_PATH }}" >> $GITHUB_STEP_SUMMARY
+          echo "  imageTag: ${TAG}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
