@@ -77,30 +77,31 @@ jobs:
           echo "tag=${BRANCH}-${SHORT_SHA}" >> $GITHUB_OUTPUT
           echo "Generated tag: ${BRANCH}-${SHORT_SHA}"
 
-      - name: Build arm64 images with dockerized Bazel
+      - name: Build multi-arch images with dockerized Bazel
         env:
           DOCKER_PREFIX: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}
           DOCKER_TAG: ${{ steps.version.outputs.tag }}
-          BUILD_ARCH: crossbuild-aarch64
+          BUILD_ARCH: amd64,crossbuild-aarch64
         run: |
-          echo "Building arm64 images with DOCKER_PREFIX=$DOCKER_PREFIX DOCKER_TAG=$DOCKER_TAG BUILD_ARCH=$BUILD_ARCH"
+          echo "Building multi-arch images (amd64 + arm64)"
+          echo "DOCKER_PREFIX=$DOCKER_PREFIX DOCKER_TAG=$DOCKER_TAG BUILD_ARCH=$BUILD_ARCH"
           make bazel-build-images
 
-      - name: Push images
+      - name: Push multi-arch images
         if: github.event_name != 'pull_request' && (github.event.inputs.push_images != 'false')
         env:
           DOCKER_PREFIX: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}
           DOCKER_TAG: ${{ steps.version.outputs.tag }}
-          BUILD_ARCH: crossbuild-aarch64
+          BUILD_ARCH: amd64,crossbuild-aarch64
         run: |
-          echo "Pushing arm64 images with DOCKER_PREFIX=$DOCKER_PREFIX DOCKER_TAG=$DOCKER_TAG"
+          echo "Pushing multi-arch images (amd64 + arm64)"
           make bazel-push-images
 
       - name: Output image references
         if: github.event_name != 'pull_request'
         run: |
           TAG=${{ steps.version.outputs.tag }}
-          echo "## Built Images (arm64)" >> $GITHUB_STEP_SUMMARY
+          echo "## Built Images (multi-arch: amd64 + arm64)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Component | Image |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
