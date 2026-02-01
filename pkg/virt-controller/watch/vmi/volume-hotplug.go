@@ -72,15 +72,17 @@ func getActiveAndOldAttachmentPods(readyHotplugVolumes []*v1.Volume, hotplugAtta
 // 1. There is a currentPod that is running. (not nil and phase.Status == Running)
 // 2. There are no readyVolumes (numReadyVolumes == 0)
 // 3. The newest oldPod is not running and not marked for deletion.
+// 4. All hotplug volumes are VolumeReady AND associated with the new pod (handoff complete).
 // If any of those are true, it will not delete the newest oldPod, since that one is the latest
 // pod that is closest to the desired state.
 func (c *Controller) cleanupAttachmentPods(currentPod *k8sv1.Pod, oldPods []*k8sv1.Pod, vmi *v1.VirtualMachineInstance, numReadyVolumes int) common.SyncError {
-	// Don't delete old pods until the NEW pod is Running and ready to serve volumes.
-	// This prevents premature deletion during concurrent hotplug operations where the
-	// old pod's block devices would disappear before the new pod is ready.
+	// Don't delete old pods until the NEW pod is fully serving all volumes.
+	// This requires: (1) new pod exists and is Running, AND (2) all hotplug volumes
+	// have VolumeReady status with AttachPodUID matching the new pod.
+	// This ensures virt-handler has completed the handoff before we remove the old pod.
 	// Fixes: https://github.com/kubevirt/kubevirt/issues/6564
-	if len(oldPods) > 0 && numReadyVolumes > 0 && (currentPod == nil || currentPod.Status.Phase != k8sv1.PodRunning) {
-		log.Log.Object(vmi).V(3).Infof("Not cleaning up old attachment pods yet: waiting for new attachment pod to reach Running phase")
+	if len(oldPods) > 0 && numReadyVolumes > 0 && !allVolumesHandedOffToPod(vmi, currentPod) {
+		log.Log.Object(vmi).V(3).Infof("Not cleaning up old attachment pods yet: waiting for volume handoff to new pod to complete")
 		return nil
 	}
 
@@ -138,6 +140,52 @@ func volumeReadyForPodDelete(phase v1.VolumePhase) bool {
 	case v1.HotplugVolumeMounted:
 		return false
 	}
+	return true
+}
+
+// allVolumesHandedOffToPod checks if all hotplug volumes in the VMI spec have been
+// fully handed off to the specified pod. This means:
+// 1. The pod exists and is Running
+// 2. Each hotplug volume has VolumeReady phase
+// 3. Each hotplug volume's AttachPodUID matches the pod's UID
+// This ensures virt-handler has completed setting up all volumes on the new pod
+// before we delete the old pod, preventing block device loss during handoff.
+func allVolumesHandedOffToPod(vmi *v1.VirtualMachineInstance, pod *k8sv1.Pod) bool {
+	if pod == nil || pod.Status.Phase != k8sv1.PodRunning {
+		return false
+	}
+
+	// Build map of volume statuses for quick lookup
+	volumeStatusMap := make(map[string]v1.VolumeStatus)
+	for _, vs := range vmi.Status.VolumeStatus {
+		if vs.HotplugVolume != nil {
+			volumeStatusMap[vs.Name] = vs
+		}
+	}
+
+	// Check each hotplug volume in the spec
+	for _, volume := range vmi.Spec.Volumes {
+		if !storagetypes.IsHotplugVolume(&volume) {
+			continue
+		}
+
+		vs, exists := volumeStatusMap[volume.Name]
+		if !exists {
+			// Volume has no status yet
+			return false
+		}
+
+		if vs.Phase != v1.VolumeReady {
+			// Volume not ready yet
+			return false
+		}
+
+		if vs.HotplugVolume == nil || vs.HotplugVolume.AttachPodUID != pod.UID {
+			// Volume not associated with the new pod yet
+			return false
+		}
+	}
+
 	return true
 }
 
