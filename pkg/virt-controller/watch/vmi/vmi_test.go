@@ -4496,10 +4496,10 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 		)
 	})
 
-	Context("cleanupAttachmentPods with volume readiness check", func() {
+	Context("cleanupAttachmentPods with new pod running check", func() {
 		// These tests verify the fix for the race condition where old attachment pods
-		// are deleted before the new pod's volumes reach VolumeReady phase.
-		// See: https://github.com/kubevirt/kubevirt/issues/9708
+		// are deleted before the new pod is Running and ready to serve volumes.
+		// See: https://github.com/kubevirt/kubevirt/issues/6564, #9708
 
 		// Helper to create an attachment pod with specific volumes
 		createAttachmentPodWithVolumes := func(virtlauncherPod *k8sv1.Pod, name, uid string, phase k8sv1.PodPhase, volumeNames ...string) *k8sv1.Pod {
@@ -4542,10 +4542,10 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 			}
 		}
 
-		It("should NOT delete old pod when new pod volumes are not ready (bug reproduction)", func() {
+		It("should NOT delete old pod when new pod is not Running (bug reproduction)", func() {
 			// This test reproduces the original bug: when adding a second volume,
-			// the old pod (with vol1) was deleted before the new pod's vol2 reached VolumeReady.
-			// With the fix, the old pod should be kept alive until all volumes are ready.
+			// the old pod (with vol1) was deleted before the new pod was Running.
+			// With the fix, the old pod should be kept alive until the new pod is Running.
 
 			vmi := newPendingVirtualMachine("testvmi")
 			vmi.Status.Phase = virtv1.Running
@@ -4554,17 +4554,17 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 				createHotplugVolume("vol1"),
 				createHotplugVolume("vol2"),
 			}
-			// vol1 is ready, vol2 is still pending (not ready yet)
+			// Volume status doesn't matter for v2 fix - we check pod Running state
 			vmi.Status.VolumeStatus = []virtv1.VolumeStatus{
 				createVolumeStatus("vol1", virtv1.VolumeReady),
 				createVolumeStatus("vol2", virtv1.VolumePending),
 			}
 
 			virtlauncherPod := newPodForVirtualMachine(vmi, k8sv1.PodRunning)
-			// Old attachment pod has only vol1
+			// Old attachment pod has only vol1, is Running
 			oldPod := createAttachmentPodWithVolumes(virtlauncherPod, "old-pod", "old-uid", k8sv1.PodRunning, "vol1")
-			// New attachment pod has vol1 + vol2 (but vol2 is not ready yet)
-			newPod := createAttachmentPodWithVolumes(virtlauncherPod, "new-pod", "new-uid", k8sv1.PodRunning, "vol1", "vol2")
+			// New attachment pod has vol1 + vol2 but is NOT Running yet (Pending)
+			newPod := createAttachmentPodWithVolumes(virtlauncherPod, "new-pod", "new-uid", k8sv1.PodPending, "vol1", "vol2")
 
 			addVirtualMachine(vmi)
 			addPod(virtlauncherPod)
@@ -4572,7 +4572,7 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 			addPod(newPod)
 
 			// Call cleanupAttachmentPods - oldPod should NOT be deleted
-			// because vol2 is not VolumeReady yet
+			// because newPod is not Running yet
 			oldPods := []*k8sv1.Pod{oldPod}
 			err := controller.cleanupAttachmentPods(newPod, oldPods, vmi, 2)
 			Expect(err).ToNot(HaveOccurred())
@@ -4581,8 +4581,8 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 			expectPodExists(oldPod.Namespace, oldPod.Name)
 		})
 
-		It("should delete old pod when all new pod volumes are ready", func() {
-			// When all volumes reach VolumeReady, cleanup should proceed normally
+		It("should delete old pod when new pod is Running", func() {
+			// When new pod is Running, cleanup should proceed normally
 
 			vmi := newPendingVirtualMachine("testvmi")
 			vmi.Status.Phase = virtv1.Running
@@ -4591,7 +4591,7 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 				createHotplugVolume("vol1"),
 				createHotplugVolume("vol2"),
 			}
-			// Both volumes are ready
+			// Volume status doesn't affect v2 fix logic
 			vmi.Status.VolumeStatus = []virtv1.VolumeStatus{
 				createVolumeStatus("vol1", virtv1.VolumeReady),
 				createVolumeStatus("vol2", virtv1.VolumeReady),
@@ -4600,7 +4600,7 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 			virtlauncherPod := newPodForVirtualMachine(vmi, k8sv1.PodRunning)
 			// Old attachment pod has only vol1
 			oldPod := createAttachmentPodWithVolumes(virtlauncherPod, "old-pod", "old-uid", k8sv1.PodRunning, "vol1")
-			// New attachment pod has vol1 + vol2, both ready
+			// New attachment pod has vol1 + vol2 and IS Running
 			newPod := createAttachmentPodWithVolumes(virtlauncherPod, "new-pod", "new-uid", k8sv1.PodRunning, "vol1", "vol2")
 
 			addVirtualMachine(vmi)
@@ -4609,7 +4609,7 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 			addPod(newPod)
 
 			// Call cleanupAttachmentPods - oldPod SHOULD be deleted
-			// because all volumes are VolumeReady
+			// because newPod is Running
 			oldPods := []*k8sv1.Pod{oldPod}
 			err := controller.cleanupAttachmentPods(newPod, oldPods, vmi, 2)
 			Expect(err).ToNot(HaveOccurred())
@@ -4683,7 +4683,7 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 			expectPodDoesNotExist(oldPod.Namespace, oldPod.Name)
 		})
 
-		It("should NOT delete old pod when adding third volume and third is not ready", func() {
+		It("should NOT delete old pod when adding third volume and new pod not Running", func() {
 			// Test with 3 volumes to ensure fix scales beyond 2 volumes
 
 			vmi := newPendingVirtualMachine("testvmi")
@@ -4694,7 +4694,7 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 				createHotplugVolume("vol2"),
 				createHotplugVolume("vol3"),
 			}
-			// vol1 and vol2 are ready, vol3 is pending
+			// Volume status doesn't affect v2 fix logic
 			vmi.Status.VolumeStatus = []virtv1.VolumeStatus{
 				createVolumeStatus("vol1", virtv1.VolumeReady),
 				createVolumeStatus("vol2", virtv1.VolumeReady),
@@ -4702,19 +4702,50 @@ var _ = Describe("VirtualMachineInstance watcher", func() {
 			}
 
 			virtlauncherPod := newPodForVirtualMachine(vmi, k8sv1.PodRunning)
-			// Old pod has vol1 + vol2
+			// Old pod has vol1 + vol2, is Running
 			oldPod := createAttachmentPodWithVolumes(virtlauncherPod, "old-pod", "old-uid", k8sv1.PodRunning, "vol1", "vol2")
-			// New pod has vol1 + vol2 + vol3
-			newPod := createAttachmentPodWithVolumes(virtlauncherPod, "new-pod", "new-uid", k8sv1.PodRunning, "vol1", "vol2", "vol3")
+			// New pod has vol1 + vol2 + vol3 but is NOT Running yet
+			newPod := createAttachmentPodWithVolumes(virtlauncherPod, "new-pod", "new-uid", k8sv1.PodPending, "vol1", "vol2", "vol3")
 
 			addVirtualMachine(vmi)
 			addPod(virtlauncherPod)
 			addPod(oldPod)
 			addPod(newPod)
 
-			// Should NOT delete old pod because vol3 is not ready
+			// Should NOT delete old pod because new pod is not Running
 			oldPods := []*k8sv1.Pod{oldPod}
 			err := controller.cleanupAttachmentPods(newPod, oldPods, vmi, 3)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Old pod should still exist
+			expectPodExists(oldPod.Namespace, oldPod.Name)
+		})
+
+		It("should NOT delete old pod when currentPod is nil", func() {
+			// When a new volume is added, currentPod may be nil if the new pod
+			// hasn't been created yet. Old pods should be preserved.
+
+			vmi := newPendingVirtualMachine("testvmi")
+			vmi.Status.Phase = virtv1.Running
+			vmi.Spec.Volumes = []virtv1.Volume{
+				createHotplugVolume("vol1"),
+				createHotplugVolume("vol2"),
+			}
+			vmi.Status.VolumeStatus = []virtv1.VolumeStatus{
+				createVolumeStatus("vol1", virtv1.VolumeReady),
+			}
+
+			virtlauncherPod := newPodForVirtualMachine(vmi, k8sv1.PodRunning)
+			// Old pod has vol1, is Running
+			oldPod := createAttachmentPodWithVolumes(virtlauncherPod, "old-pod", "old-uid", k8sv1.PodRunning, "vol1")
+
+			addVirtualMachine(vmi)
+			addPod(virtlauncherPod)
+			addPod(oldPod)
+
+			// currentPod is nil - new pod not created yet
+			oldPods := []*k8sv1.Pod{oldPod}
+			err := controller.cleanupAttachmentPods(nil, oldPods, vmi, 2)
 			Expect(err).ToNot(HaveOccurred())
 
 			// Old pod should still exist
